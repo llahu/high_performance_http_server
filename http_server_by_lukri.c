@@ -4,6 +4,8 @@
 
 #include "http_server_by_lukri.h"
 #include <stdlib.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 //event_dispatcher的具体实现，这里是使用epoll来实现IO复用的
 const struct event_dispatcher epoll_dispatcher = {
@@ -123,10 +125,106 @@ int epoll_del(struct event_loop *eventLoop, struct channel *channel){
     return 0;
 }
 
+int epoll_update(struct event_loop *eventLoop, struct channel *channel1){
+    epoll_dispatcher_data *pollDispatcherData = (epoll_dispatcher_data *)eventLoop->event_dispatcher_data;
+
+    int fd = channel1->fd;
+
+    int events = 0;
+    if (channel1->events & EVENT_READ){
+        events = events | EPOLLIN;
+    }
+
+    if(channel1->events & EVENT_WRITE){
+        events = events | EPOLLOUT;
+    }
+
+    struct epoll_event event;
+    event.data.fd = fd;
+    event.events = events;
+
+    if(epoll_ctl(pollDispatcherData->efd, EPOLL_CTL_MOD, fd, &event) == -1){
+        printf("epoll ctl modify fd failed");
+    }
+
+    return 0;
+}
+
+int epoll_dispatch(struct event_loop *eventLoop, struct timeval *timeval){
+    epoll_dispatcher_data *pollDispatcherData = (epoll_dispatcher_data *) eventLoop->event_dispatcher_data;
+
+    int i, n;
+    n = epoll_wait(pollDispatcherData->efd, pollDispatcherData->events, MAXEVENTS, -1);
+
+    for (i = 0; i< n; i++){
+        if ((pollDispatcherData->events[i].events & EPOLLERR) || (pollDispatcherData->events[i].events & EPOLLHUP) ){
+            printf("epoll error\n");
+            close(pollDispatcherData->events[i].data.fd);
+            continue;
+        }
+
+        //当前的eventloop上有可读事件发生
+        if((pollDispatcherData->events[i].events & EPOLLIN)){
+            printf("get message channel fd=%d for read, %s", pollDispatcherData->events[i].data.fd, EVENT_READ);
+            channel_event_activate(eventLoop, pollDispatcherData->events[i].data.fd, EVENT_READ);
+        }
+
+        //当前的eventloop上有可读事件发生
+        if((pollDispatcherData->events[i].events & EPOLLOUT)){
+            printf("get message channel fd=%d for write, %s", pollDispatcherData->events[i].data.fd, EVENT_WRITE);
+            channel_event_activate(eventLoop, pollDispatcherData->events[i].data.fd, EVENT_WRITE);
+        }
+    }
+
+    return 0;
+}
+
+int channel_event_activate(struct event_loop *eventLoop, int fd, int revents){
+    struct channel_map *map = eventLoop->channelMap;
+    printf("activate channel fd == %d, revents=%d, %s", fd, revents, eventLoop->thread_name);
+
+    if (fd < 0)
+        return 0;
+
+    if (fd >= map->nentries)
+        return -1;
+
+    //获取当前fd所映射的channel地址
+    struct channel *channel = map->entries[fd];
+    assert(fd == channel->fd);
+
+    if (revents & EVENT_READ){
+        if (channel->eventReadCallback)
+            channel->eventReadCallback(channel->data);
+    }
+
+    if (revents & EVENT_WRITE){
+        if (channel->eventWriteCallback)
+            channel->eventWriteCallback(channel->data);
+    }
+
+    return 0;
+}
+
+//初始化channel
+struct channel *
+channel_new(int fd, int events, event_read_callback eventReadCallback, event_write_callback eventWriteCallback
+            void *data){
+    struct channel *chan = malloc(sizeof(struct channel));
+    chan->fd = fd;
+    chan->events = events;
+    chan->eventReadCallback = eventReadCallback;
+    chan->eventWriteCallback = eventWriteCallback;
+    chan->data = data;
+
+    return chan;
+}
+
 void map_init(struct channle_map *map){
     map->nentries = 0;
     map->entries = NULL;
 }
+
 
 int main(int c, char **v){
     //main thread

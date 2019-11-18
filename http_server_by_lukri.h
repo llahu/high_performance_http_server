@@ -111,7 +111,48 @@ struct event_loop{
     char *thread_name;
 };
 
+//数据缓冲区对象
+struct buffer{
+    char *data; //实际缓冲区
+    int readIndex; //缓冲读取位置
+    int writeIndex; //缓冲写入位置
+    int total_size; //总大小
+};
+
+typedef int (*connection_completed_call_back)(struct tcp_connection *tcpConnection);
+
+typedef int (*message_call_back)(struct buffer *buffer, struct tcp_connection *tcpConnection);
+
+typedef int (*write_completed_call_back)(struct tcp_connection *tcpConnection);
+
+typedef int (*connection_closed_call_back)(struct tcp_connection *tcpConnection);
+
+//表示一次tcp连接对象
+struct tcp_connection{
+    struct event_loop *eventLoop;
+    struct channel *channel;
+    char *name;
+
+    struct buffer *input_buffer; //接收缓冲区
+    struct buffer *output_buffer; //发送缓冲区
+
+    //这些函数将在tcp_server_init()被初始化
+    connection_completed_call_back connectionCompletedCallBack;
+    message_call_back  messageCallBack;
+    write_completed_call_back writeCompletedCallBack;
+    connection_closed_call_back  connectionClosedCallBack;
+
+    void * data; //for callback use: http_server
+    void * request; //for callback use
+    void * response; //for callback use
+};
+
 struct event_loop *event_loop_init();
 
 struct event_loop *event_loop_init_with_name(char * thread_name);
 
+int channel_event_activate(struct event_loop *eventLoop, int fd, int revents);
+
+struct channel *
+channel_new(int fd, int events, event_read_callback eventReadCallback, event_write_callback eventWriteCallback,
+            void *data);
